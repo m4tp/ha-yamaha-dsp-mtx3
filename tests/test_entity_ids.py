@@ -5,6 +5,7 @@ import unittest
 from unittest.mock import MagicMock
 
 from custom_components.yamaha_dsp import create_dsp_configuration
+from custom_components.yamaha_dsp.button import RefreshButtonEntity
 from custom_components.yamaha_dsp.media_player import SourceEntity, SpeakerEntity
 from custom_components.yamaha_dsp.select import PresetSelectEntity, RouterSelectEntity
 from custom_components.yamaha_dsp.sensor import MeterSensorEntity
@@ -39,6 +40,8 @@ EXPECTED = [
     ("ZA123_mtx_stereo_stin2l_level", "STIN2L level"),
     ("ZA123_mtx_zone_3_level", "ZONE3 level"),
     ("ZA123_mtx_output_8_level", "OUT8 level"),
+    # Added in 0.4.1
+    ("ZA123_refresh", "DSP refresh"),
 ]
 
 
@@ -53,6 +56,7 @@ class EntityIdentityTests(unittest.TestCase):
             *(RouterSelectEntity(c, device, DEVICE_INFO) for c in config.routers),
             PresetSelectEntity(device, DEVICE_INFO),
             *(MeterSensorEntity(c, device, DEVICE_INFO) for c in config.sources if c.meter is not None),
+            RefreshButtonEntity(device, DEVICE_INFO),
         ]
 
         self.assertEqual(EXPECTED, [(e.unique_id, e.name) for e in entities])

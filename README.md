@@ -19,8 +19,10 @@ configuration of the original integration (domain `yamaha_dsp`).
 * **Push updates**: changes made from MTX-MRX Editor, Wireless DCP, DCP panels or preset recalls show up in
   Home Assistant within a fraction of a second.
 * **Level meter sensors** in dBFS for input channels, stereo inputs, zones and output channels.
-* Automatic reconnection: entities become unavailable while the matrix is unreachable and are refreshed as soon
-  as the connection is back.
+* **The matrix can be switched off**: entities become unavailable while it is off (also when Home Assistant
+  starts first) and read every parameter again as soon as it is back.
+* **DSP refresh button**: reads every parameter right away, or retries the connection immediately when the
+  matrix is unreachable.
 
 ## Installation
 
@@ -35,6 +37,39 @@ Or add it by hand: HACS → ⋮ → *Custom repositories* → `https://github.co
 
 Copy `custom_components/yamaha_dsp` from this repository into the `custom_components` folder of your Home
 Assistant configuration and restart Home Assistant.
+
+## When the matrix is switched off
+
+The matrix does not need to be on when Home Assistant starts. While it is off, its entities are unavailable and
+the integration tries to connect after 1, 2, 5 and 10 seconds, then every 30 seconds. As soon as the matrix
+answers, every entity reads all its parameters again: there is no need to wait for the 5 minute poll.
+
+The **DSP refresh** button (`button.dsp_refresh`) is always available:
+
+* matrix reachable: every entity reads all its parameters again right away;
+* matrix unreachable: the next connection attempt starts immediately instead of waiting up to 30 seconds.
+
+Add it to a dashboard, e.g. next to the switch that powers the matrix on:
+
+```yaml
+type: button
+entity: button.dsp_refresh
+name: Reconnect matrix
+tap_action:
+  action: perform-action
+  perform_action: button.press
+  target:
+    entity_id: button.dsp_refresh
+```
+
+Or press it from an automation, a few seconds after the matrix is powered on:
+
+```yaml
+actions:
+  - action: button.press
+    target:
+      entity_id: button.dsp_refresh
+```
 
 ## Network requirements
 
@@ -218,7 +253,8 @@ logger:
 
 **Entities unavailable**: Home Assistant cannot reach the matrix. Check the IP address, port 49280, firewalls and
 VLANs (see [Network requirements](#network-requirements)). The integration reconnects by itself (after 1, 2,
-5, 10, then every 30 seconds) and refreshes all entities once the connection is back.
+5, 10, then every 30 seconds) and refreshes all entities once the connection is back. Press **DSP refresh** to
+retry right away.
 
 **"Update of … is taking over 10 seconds"**: commands to the matrix are sent one at a time. Since push updates
 keep entities current, polling only runs every 5 minutes as a safety net. If the warning persists, the matrix

@@ -6,8 +6,10 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from fake_mtx import FakeMtx
+from homeassistant.exceptions import ConfigEntryNotReady
 
-from custom_components.yamaha_dsp import _request_meters, create_dsp_configuration
+from custom_components.yamaha_dsp import _request_meters, async_setup_entry, create_dsp_configuration
+from custom_components.yamaha_dsp.button import RefreshButtonEntity
 from custom_components.yamaha_dsp.config_flow import _is_mtx
 from custom_components.yamaha_dsp.media_player import SourceEntity
 from custom_components.yamaha_dsp.sensor import MeterSensorEntity
@@ -318,6 +320,81 @@ class MtxDetectionTests(unittest.TestCase):
     def test_title_fallback_for_old_entries(self):
         self.assertTrue(_is_mtx(SimpleNamespace(data={"host": "x", "port": 1}, title="Yamaha MTX3")))
         self.assertFalse(_is_mtx(SimpleNamespace(data={"host": "x", "port": 1}, title="Yamaha MRX7-D")))
+
+
+class ManualRefreshTests(FakeServerTestCase):
+    async def test_refresh_when_connected_rereads_entities(self):
+        await self.device.connect()
+        source = create_dsp_configuration({"mtx_channels": ["input_1"]}).sources[0]
+        entity = SourceEntity(source, self.device, DEVICE_INFO)
+        entity.hass = MagicMock()
+        await entity.async_added_to_hass()
+        entity.hass.loop.call_later.reset_mock()
+
+        await RefreshButtonEntity(self.device, DEVICE_INFO).async_press()
+
+        entity.hass.loop.call_later.assert_called_once()
+        self.assertEqual(1, self.fake.connections)  # no reconnection
+        await entity.async_will_remove_from_hass()
+
+    async def test_refresh_when_disconnected_retries_right_away(self):
+        await self.device.connect()
+        with patch.object(device_module, "RECONNECT_BACKOFF", (60,)):
+            self.fake.drop_clients()
+            await wait_until(lambda: not self.device.is_connected())
+            await asyncio.sleep(0.1)
+            self.assertEqual(1, self.fake.connections)  # waiting for the 60 s backoff
+
+            self.device.refresh()
+            await wait_until(self.device.is_connected, timeout=1)
+        self.assertEqual(2, self.fake.connections)
+
+    async def test_start_reconnecting_without_previous_connection(self):
+        self.device.start_reconnecting()
+        await wait_until(self.device.is_connected)
+        self.assertEqual([True], self.events)
+
+    def test_button_identity(self):
+        button = RefreshButtonEntity(MagicMock(), DEVICE_INFO)
+        self.assertEqual(("ZA123_refresh", "DSP refresh"), (button.unique_id, button.name))
+        self.assertTrue(button.available)
+
+
+class SetupWhileDeviceOffTests(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        # A port where nothing listens: the matrix is switched off
+        server = await asyncio.start_server(lambda r, w: None, "127.0.0.1", 0)
+        self.port = server.sockets[0].getsockname()[1]
+        server.close()
+        await server.wait_closed()
+
+    def _entry(self, unique_id):
+        entry = MagicMock(unique_id=unique_id, title="Yamaha MTX3", options={"mtx_channels": ["input_1"]})
+        entry.data = {"host": "127.0.0.1", "port": self.port, "product_name": "MTX3"}
+        return entry
+
+    async def test_entities_are_set_up_unavailable(self):
+        hass = MagicMock()
+        hass.config_entries.async_forward_entry_setups = AsyncMock()
+        entry = self._entry("ZA123")
+
+        with patch.object(device_module, "RECONNECT_BACKOFF", (60,)), self.assertLogs(level="WARNING"):
+            self.assertTrue(await async_setup_entry(hass, entry))
+
+        runtime_data = entry.runtime_data
+        try:
+            self.assertFalse(runtime_data.device.is_connected())
+            self.assertIsNone(runtime_data.product_information)
+            self.assertEqual({("yamaha_dsp", "ZA123")}, runtime_data.device_info["identifiers"])
+            self.assertTrue(runtime_data.supports_presets)
+            hass.config_entries.async_forward_entry_setups.assert_awaited_once()
+            self.assertFalse(runtime_data.device._reconnect_task.done())  # keeps trying in the background
+        finally:
+            await runtime_data.device.disconnect()
+
+    async def test_entry_without_unique_id_waits_for_device(self):
+        with self.assertRaises(ConfigEntryNotReady):
+            await async_setup_entry(MagicMock(), self._entry(None))
 
 
 if __name__ == "__main__":
