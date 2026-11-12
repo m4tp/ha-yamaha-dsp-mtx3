@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 import re
@@ -16,6 +17,7 @@ from custom_components.yamaha_dsp.const import (
     MAX_NORMALIZED_VOLUME,
     OPTION_MTX_CHANNELS,
     OPTION_MTX_LIMIT_TO_0_DB,
+    OPTION_MTX_METERS,
 )
 from custom_components.yamaha_dsp.mtx import MTX_CHANNELS, NORMALIZED_0_DB
 from custom_components.yamaha_dsp.yamaha.command import Address, create_parameter
@@ -41,6 +43,8 @@ class SourceConfiguration:
     invert_mute: bool = False
     # Stable key for entities created from the MTX channel picker (None for JSON-configured sources)
     channel_key: str | None = None
+    # Level meter as (meter address, position) when a level sensor should be created
+    meter: tuple[str, int] | None = None
 
 
 @dataclass
@@ -84,7 +88,7 @@ class EntityType(Enum):
     PRESET = "preset"
 
 
-PLATFORMS: list[Platform] = [Platform.MEDIA_PLAYER, Platform.SWITCH, Platform.SELECT]
+PLATFORMS: list[Platform] = [Platform.MEDIA_PLAYER, Platform.SWITCH, Platform.SELECT, Platform.SENSOR]
 UNIQUE_ID_REGEXP = re.compile(r"[\s+]")
 
 logger = logging.getLogger(__name__)
@@ -141,6 +145,7 @@ def create_dsp_configuration(options) -> DspConfiguration:
 
     # MTX channels picked in the options flow
     limit_to_0_db = options.get(OPTION_MTX_LIMIT_TO_0_DB, True)
+    meters_enabled = options.get(OPTION_MTX_METERS, False)
     for key in options.get(OPTION_MTX_CHANNELS) or []:
         channel = MTX_CHANNELS.get(key)
         if channel is None:
@@ -155,6 +160,7 @@ def create_dsp_configuration(options) -> DspConfiguration:
                 NORMALIZED_0_DB if limit_to_0_db else MAX_NORMALIZED_VOLUME,
                 channel.mute_inverted,
                 channel.key,
+                channel.meter if meters_enabled else None,
             )
         )
 
@@ -243,7 +249,28 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     logger.info(f"Initializing entry with runtime data: {entry.runtime_data}")
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
+    # Level meters are streamed by the device for 10 seconds after each request
+    meters = sorted({source.meter[0] for source in dsp_configuration.sources if source.meter is not None})
+    if meters:
+        entry.async_create_background_task(
+            hass, _request_meters(entry.runtime_data.device, meters), "yamaha_dsp meter requests"
+        )
+
     return True
+
+
+METER_REQUEST_PERIOD = 5  # seconds, must stay well below the 10 second transmission window
+METER_INTERVAL_MS = 1000
+
+
+async def _request_meters(device: YamahaDspDevice, meters: list[str]) -> None:
+    while True:
+        for meter in meters:
+            try:
+                await device.request_meter(meter, METER_INTERVAL_MS)
+            except Exception as e:  # connection problems are retried on the next round
+                logger.debug(f"Meter request for {meter} failed: {e}")
+        await asyncio.sleep(METER_REQUEST_PERIOD)
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:

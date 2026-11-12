@@ -13,6 +13,7 @@ from custom_components.yamaha_dsp import (
     YamahaDspDevice,
     create_unique_id,
 )
+from custom_components.yamaha_dsp.push import PushUpdateMixin
 from custom_components.yamaha_dsp.yamaha.command import create_parameter
 
 logger = logging.getLogger(__name__)
@@ -30,7 +31,7 @@ async def async_setup_entry(_hass: HomeAssistant, entry, async_add_entities):
         async_add_entities([RouteSwitchEntity(route_configuration, device, device_info)])
 
 
-class RouteSwitchEntity(SwitchEntity):
+class RouteSwitchEntity(PushUpdateMixin, SwitchEntity):
     def __init__(self, config: RouteConfiguration, device: YamahaDspDevice, device_info: DeviceInfo):
         self._config = config
         self._device = device
@@ -39,6 +40,10 @@ class RouteSwitchEntity(SwitchEntity):
         self._switch_state = False
 
         self._mute_param = create_parameter(self._config.index_mute)
+        self._init_push()
+
+    def _push_parameters(self) -> list[str]:
+        return [self._mute_param]
 
     _attr_device_class = SwitchDeviceClass.SWITCH
 
@@ -68,6 +73,10 @@ class RouteSwitchEntity(SwitchEntity):
 
     async def async_turn_on(self, **kwargs: Any) -> None:
         await self._device.set_parameter_raw(self._mute_param, "0", "0", "1")
+        self._switch_state = True
+        self._write_state()
 
     async def async_turn_off(self, **kwargs: Any) -> None:
         await self._device.set_parameter_raw(self._mute_param, "0", "0", "0")
+        self._switch_state = False
+        self._write_state()

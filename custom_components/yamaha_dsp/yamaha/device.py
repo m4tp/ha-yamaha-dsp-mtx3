@@ -1,6 +1,7 @@
 import asyncio
 import logging
 
+from collections.abc import Callable
 from dataclasses import dataclass
 
 from pytelnetdevice import TelnetDevice
@@ -13,9 +14,14 @@ from custom_components.yamaha_dsp.yamaha.response import (
     Response,
     ResponseError,
     parse_current_preset,
+    parse_meter_notification,
     parse_preset_info,
     parse_response,
 )
+
+ParameterListener = Callable[[str], None]
+MeterListener = Callable[[list[int]], None]
+EventListener = Callable[[str], None]
 
 
 @dataclass
@@ -39,6 +45,12 @@ class YamahaDspDevice(TelnetDevice):
         self._response_listener_task: asyncio.Task | None = None
         self._last_command_response: Response | Exception | None = None
         self._command_response_received = asyncio.Event()
+
+        # Push notifications. Listeners are plain callbacks invoked from the response listener task:
+        # they must not await or run device commands themselves, only schedule work.
+        self._parameter_listeners: dict[str, list[ParameterListener]] = {}
+        self._meter_listeners: dict[str, list[MeterListener]] = {}
+        self._event_listeners: list[EventListener] = []
 
     async def after_connect(self):
         # Start the response listener
@@ -73,9 +85,65 @@ class YamahaDspDevice(TelnetDevice):
                 self._last_command_response = e
                 self._command_response_received.set()
 
-    @staticmethod
-    async def _handle_notify_response(response: NotifyResponse):
+    async def _handle_notify_response(self, response: NotifyResponse):
+        parts = response.parsed_response
+        kind = parts[1] if len(parts) > 1 else ""
+
+        if kind == "mtr":
+            try:
+                address, values = parse_meter_notification(response.raw_response)
+            except ValueError as e:
+                logger.debug(f"Ignoring meter notification: {e}")
+                return
+            self._dispatch(self._meter_listeners.get(address, []), values)
+            return
+
         logger.debug(f"Got NOTIFY response: {response.raw_response}")
+
+        if kind in ("set", "setn") and len(parts) > 2:
+            # NOTIFY set MTX:mem_512/60001/0/0/0/0/0 0 0 1 "ON" -> raw value is the 6th field
+            raw_value = parts[5] if len(parts) > 5 else response.value
+            self._dispatch(self._parameter_listeners.get(parts[2], []), raw_value)
+        else:
+            # sscurrent, ssrecall, scheduler events, ...: listeners decide what is relevant
+            self._dispatch(self._event_listeners, kind)
+
+    @staticmethod
+    def _dispatch(listeners: list, payload) -> None:
+        for listener in list(listeners):
+            try:
+                listener(payload)
+            except Exception:  # a broken listener must never stop the response listener
+                logger.exception("Error in notification listener")
+
+    @staticmethod
+    def _add_listener(registry: dict[str, list], key: str, listener) -> Callable[[], None]:
+        registry.setdefault(key, []).append(listener)
+
+        def remove() -> None:
+            listeners = registry.get(key, [])
+            if listener in listeners:
+                listeners.remove(listener)
+
+        return remove
+
+    def add_parameter_listener(self, parameter: str, listener: ParameterListener) -> Callable[[], None]:
+        """Calls listener(value) when another controller changes the parameter (e.g. "MTX:mem_512/60000/0/0/0/0/0")."""
+        return self._add_listener(self._parameter_listeners, parameter, listener)
+
+    def add_meter_listener(self, meter: str, listener: MeterListener) -> Callable[[], None]:
+        """Calls listener(levels) for each meter notification of the meter (e.g. "MTX:mtr_512/20005")."""
+        return self._add_listener(self._meter_listeners, meter, listener)
+
+    def add_event_listener(self, listener: EventListener) -> Callable[[], None]:
+        """Calls listener(kind) for notifications that are not parameter or meter changes (presets, ...)."""
+        self._event_listeners.append(listener)
+
+        def remove() -> None:
+            if listener in self._event_listeners:
+                self._event_listeners.remove(listener)
+
+        return remove
 
     async def _send_command(self, command):
         self._writer.write(f"{command}\n".encode())
@@ -191,3 +259,7 @@ class YamahaDspDevice(TelnetDevice):
 
     async def recall_preset(self, index: int) -> OkResponse:
         return await self._run_command(f"ssrecall {index}")
+
+    async def request_meter(self, meter: str, interval_ms: int = 1000) -> OkResponse:
+        # The device sends meter data for 10 seconds after each request, so this has to be repeated
+        return await self._run_command(f"mtrstart {meter}/meter {interval_ms}")

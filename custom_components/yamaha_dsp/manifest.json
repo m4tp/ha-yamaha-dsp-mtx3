@@ -1,7 +1,7 @@
 {
   "domain": "yamaha_dsp",
   "name": "Yamaha DSP",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "codeowners": [
     "@Jalle19"
   ],
@@ -10,7 +10,7 @@
   "dependencies": [],
   "documentation": "https://www.home-assistant.io/integrations/yamaha_dsp",
   "homekit": {},
-  "iot_class": "local_polling",
+  "iot_class": "local_push",
   "requirements": [
     "bidict",
     "pytelnetdevice @ git+https://github.com/NitorCreations/pytelnetdevice@0.2.0"

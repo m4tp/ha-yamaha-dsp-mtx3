@@ -24,6 +24,7 @@ from custom_components.yamaha_dsp.const import (
     OPTION_DEFAULT_SPEAKER_SOURCES,
     OPTION_MTX_CHANNELS,
     OPTION_MTX_LIMIT_TO_0_DB,
+    OPTION_MTX_METERS,
     OPTION_ROUTE_CONFIGURATION,
     OPTION_ROUTER_CONFIGURATION,
     OPTION_SOURCE_CONFIGURATION,
@@ -131,6 +132,7 @@ class YamahaDspOptionsFlow(OptionsFlow):
                 vol.Optional(
                     OPTION_MTX_LIMIT_TO_0_DB, default=options.get(OPTION_MTX_LIMIT_TO_0_DB, True)
                 ): BooleanSelector(),
+                vol.Optional(OPTION_MTX_METERS, default=options.get(OPTION_MTX_METERS, False)): BooleanSelector(),
                 vol.Required(OPTION_ADVANCED): section(vol.Schema(self._json_fields()), {"collapsed": True}),
             }
         )

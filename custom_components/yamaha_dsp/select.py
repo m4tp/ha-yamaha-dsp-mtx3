@@ -12,6 +12,7 @@ from custom_components.yamaha_dsp import (
     YamahaDspDevice,
     create_unique_id,
 )
+from custom_components.yamaha_dsp.push import PushUpdateMixin
 from custom_components.yamaha_dsp.yamaha.command import create_parameter
 
 logger = logging.getLogger(__name__)
@@ -33,7 +34,7 @@ async def async_setup_entry(_hass: HomeAssistant, entry, async_add_entities):
         async_add_entities([PresetSelectEntity(device, device_info)])
 
 
-class RouterSelectEntity(SelectEntity):
+class RouterSelectEntity(PushUpdateMixin, SelectEntity):
     def __init__(self, config: RouterConfiguration, device: YamahaDspDevice, device_info: DeviceInfo):
         self._config = config
         self._device = device
@@ -42,6 +43,10 @@ class RouterSelectEntity(SelectEntity):
         self._source_param = create_parameter(self._config.index_source)
         self._source_bidict = bidict({source.value: source.label for source in self._config.sources})
         self._current_option: str | None = None
+        self._init_push()
+
+    def _push_parameters(self) -> list[str]:
+        return [self._source_param]
 
     @property
     def name(self) -> str:
@@ -81,9 +86,11 @@ class RouterSelectEntity(SelectEntity):
             raise ValueError(f"Invalid option '{option}' for router '{self._config.name}'")
 
         await self._device.set_parameter_raw(self._source_param, "0", "0", str(source_value))
+        self._current_option = option
+        self._write_state()
 
 
-class PresetSelectEntity(SelectEntity):
+class PresetSelectEntity(PushUpdateMixin, SelectEntity):
     """Shows the current preset and recalls a preset when an option is selected."""
 
     # The preset list rarely changes (only when re-synchronized from MTX-MRX Editor),
@@ -97,6 +104,7 @@ class PresetSelectEntity(SelectEntity):
         self._presets: bidict[int, str] = bidict()
         self._current_option: str | None = None
         self._updates_since_refresh = self.PRESET_LIST_REFRESH_INTERVAL
+        self._init_push()
 
     @property
     def name(self) -> str:
@@ -156,3 +164,4 @@ class PresetSelectEntity(SelectEntity):
 
         await self._device.recall_preset(index)
         self._current_option = option
+        self._write_state()

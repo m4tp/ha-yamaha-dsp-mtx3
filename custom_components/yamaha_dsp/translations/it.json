@@ -35,11 +35,13 @@
         "description": "Scegli i canali da controllare da Home Assistant. Ogni canale diventa un media player con volume e mute; puoi rinominare le entità dall'interfaccia di Home Assistant.",
         "data": {
           "mtx_channels": "Canali",
-          "mtx_limit_to_0_db": "Limita il volume a 0 dB"
+          "mtx_limit_to_0_db": "Limita il volume a 0 dB",
+          "mtx_meters": "Sensori di livello (meter)"
         },
         "data_description": {
           "mtx_channels": "Canali d'ingresso, ingressi stereo, gruppi DCA (livello e mute di gruppo), zone e canali d'uscita",
-          "mtx_limit_to_0_db": "Il 100% in Home Assistant corrisponde a 0 dB invece che a +10 dB"
+          "mtx_limit_to_0_db": "Il 100% in Home Assistant corrisponde a 0 dB invece che a +10 dB",
+          "mtx_meters": "Crea un sensore con il livello del segnale (dBFS) di ogni canale scelto, aggiornato ogni secondo. Le DCA non hanno meter."
         },
         "sections": {
           "advanced": {

@@ -82,6 +82,20 @@ mute (1 = muted), which is handled automatically. "Limit volume to 0 dB" (enable
 Home Assistant to 0 dB instead of +10 dB. Entities are named after the channel (e.g. `CH1`, `DCA A`) and can
 be renamed from the Home Assistant UI. The JSON fields below are still available under "Advanced".
 
+Changes made elsewhere (MTX-MRX Editor, Wireless DCP, DCP panels, preset recalls) are pushed by the device and
+shown in Home Assistant within a fraction of a second; polling remains as a fallback.
+
+"Level meter sensors" adds a `dBFS` sensor for each selected input channel, stereo input, zone and output
+channel (DCA groups have no meter), updated once per second. Each sensor writes a state change every time the
+level changes, so consider excluding them from the recorder:
+
+```yaml
+recorder:
+  exclude:
+    entity_globs:
+      - sensor.*_level
+```
+
 The MTX series has no Remote Control Setup List. Instead, every `index_*` field accepts the parameter's
 memory address from section 7 of the protocol specification (`docs/`), as a string:
 

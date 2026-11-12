@@ -18,6 +18,7 @@ from custom_components.yamaha_dsp import (
     YamahaDspDevice,
     create_unique_id,
 )
+from custom_components.yamaha_dsp.push import PushUpdateMixin
 from custom_components.yamaha_dsp.yamaha.command import Address, create_parameter
 
 logger = logging.getLogger(__name__)
@@ -39,7 +40,7 @@ async def async_setup_entry(_hass: HomeAssistant, entry, async_add_entities):
         async_add_entities([SourceEntity(source_configuration, device, device_info)])
 
 
-class YamahaDspMediaPlayerEntity(MediaPlayerEntity):
+class YamahaDspMediaPlayerEntity(PushUpdateMixin, MediaPlayerEntity):
     def __init__(
         self,
         device: YamahaDspDevice,
@@ -61,6 +62,11 @@ class YamahaDspMediaPlayerEntity(MediaPlayerEntity):
         self._invert_mute = invert_mute
         self._volume_param = create_parameter(index_volume)
         self._mute_param = create_parameter(index_mute)
+
+        self._init_push()
+
+    def _push_parameters(self) -> list[str]:
+        return [self._volume_param, self._mute_param]
 
     @property
     def device_info(self) -> DeviceInfo:
@@ -96,9 +102,13 @@ class YamahaDspMediaPlayerEntity(MediaPlayerEntity):
         value = mute if self._invert_mute else not mute
         await self._device.set_parameter_raw(self._mute_param, "0", "0", "1" if value else "0")
         self._muted = mute
+        self._write_state()
 
     async def async_set_volume_level(self, volume: float) -> None:
-        await self._device.set_parameter_normalized(self._volume_param, "0", "0", str(round(volume * self._max_volume)))
+        normalized = round(volume * self._max_volume)
+        await self._device.set_parameter_normalized(self._volume_param, "0", "0", str(normalized))
+        self._volume = normalized
+        self._write_state()
 
 
 class SpeakerEntity(YamahaDspMediaPlayerEntity):
@@ -112,6 +122,9 @@ class SpeakerEntity(YamahaDspMediaPlayerEntity):
         )
 
         self._source_param = create_parameter(self._config.index_source)
+
+    def _push_parameters(self) -> list[str]:
+        return [*super()._push_parameters(), self._source_param]
 
     _attr_device_class = MediaPlayerDeviceClass.SPEAKER
     _attr_supported_features = (

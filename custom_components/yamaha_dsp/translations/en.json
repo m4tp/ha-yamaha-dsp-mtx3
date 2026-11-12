@@ -35,11 +35,13 @@
         "description": "Pick the channels to control from Home Assistant. Each channel becomes a media player with volume and mute; rename the entities from the Home Assistant UI.",
         "data": {
           "mtx_channels": "Channels",
-          "mtx_limit_to_0_db": "Limit volume to 0 dB"
+          "mtx_limit_to_0_db": "Limit volume to 0 dB",
+          "mtx_meters": "Level meter sensors"
         },
         "data_description": {
           "mtx_channels": "Input channels, stereo inputs, DCA groups (level and group mute), zones and output channels",
-          "mtx_limit_to_0_db": "100% in Home Assistant corresponds to 0 dB instead of +10 dB"
+          "mtx_limit_to_0_db": "100% in Home Assistant corresponds to 0 dB instead of +10 dB",
+          "mtx_meters": "Creates a sensor with the signal level (dBFS) of each selected channel, updated every second. DCA groups have no meter."
         },
         "sections": {
           "advanced": {
