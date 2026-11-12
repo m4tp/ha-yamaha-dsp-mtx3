@@ -29,7 +29,35 @@
         "data_description": {
           "default_speaker_sources": "Speaker source list to use if not explicitly defined in speaker configuration"
         }
+      },
+      "mtx": {
+        "title": "MTX configuration",
+        "description": "Pick the channels to control from Home Assistant. Each channel becomes a media player with volume and mute; rename the entities from the Home Assistant UI.",
+        "data": {
+          "mtx_channels": "Channels",
+          "mtx_limit_to_0_db": "Limit volume to 0 dB"
+        },
+        "data_description": {
+          "mtx_channels": "Input channels, stereo inputs, DCA groups (level and group mute), zones and output channels",
+          "mtx_limit_to_0_db": "100% in Home Assistant corresponds to 0 dB instead of +10 dB"
+        },
+        "sections": {
+          "advanced": {
+            "name": "Advanced (JSON)",
+            "description": "Optional manual configuration by parameter address, see the documentation.",
+            "data": {
+              "default_speaker_sources": "Default speaker sources",
+              "speaker_configuration": "Speaker configuration",
+              "source_configuration": "Source configuration",
+              "route_configuration": "Route configuration",
+              "router_configuration": "Router configuration"
+            }
+          }
+        }
       }
+    },
+    "error": {
+      "invalid_configuration": "The configuration is not valid, check the JSON and the parameter addresses"
     }
   }
 }

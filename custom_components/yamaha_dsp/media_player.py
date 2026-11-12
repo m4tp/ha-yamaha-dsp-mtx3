@@ -47,6 +47,7 @@ class YamahaDspMediaPlayerEntity(MediaPlayerEntity):
         index_volume: Address,
         index_mute: Address,
         max_volume: int,
+        invert_mute: bool = False,
     ):
         self._device = device
         self._device_info = device_info
@@ -56,6 +57,8 @@ class YamahaDspMediaPlayerEntity(MediaPlayerEntity):
         self._muted = False
 
         self._max_volume = max_volume
+        # Channel "ON" parameters use 1 = on, while group "mute on" parameters use 1 = muted
+        self._invert_mute = invert_mute
         self._volume_param = create_parameter(index_volume)
         self._mute_param = create_parameter(index_mute)
 
@@ -85,11 +88,14 @@ class YamahaDspMediaPlayerEntity(MediaPlayerEntity):
     async def async_update(self) -> None:
         volume_resp = await self._device.query_parameter_normalized(self._volume_param)
         self._volume = volume_resp.get_int_value()
-        is_on_resp = await self._device.query_parameter_raw(self._mute_param)
-        self._muted = not is_on_resp.get_bool_value()
+        mute_resp = await self._device.query_parameter_raw(self._mute_param)
+        value = mute_resp.get_bool_value()
+        self._muted = value if self._invert_mute else not value
 
     async def async_mute_volume(self, mute: bool) -> None:
-        await self._device.set_parameter_raw(self._mute_param, "0", "0", "0" if mute else "1")
+        value = mute if self._invert_mute else not mute
+        await self._device.set_parameter_raw(self._mute_param, "0", "0", "1" if value else "0")
+        self._muted = mute
 
     async def async_set_volume_level(self, volume: float) -> None:
         await self._device.set_parameter_normalized(self._volume_param, "0", "0", str(round(volume * self._max_volume)))
@@ -147,7 +153,9 @@ class SpeakerEntity(YamahaDspMediaPlayerEntity):
 
 class SourceEntity(YamahaDspMediaPlayerEntity):
     def __init__(self, config: SourceConfiguration, device: YamahaDspDevice, device_info: DeviceInfo):
-        super().__init__(device, device_info, config.index_volume, config.index_mute, config.max_volume)
+        super().__init__(
+            device, device_info, config.index_volume, config.index_mute, config.max_volume, config.invert_mute
+        )
         self._config = config
 
     _attr_device_class = MediaPlayerDeviceClass.SPEAKER
@@ -155,10 +163,17 @@ class SourceEntity(YamahaDspMediaPlayerEntity):
 
     @property
     def name(self) -> str:
+        if self._config.channel_key is not None:
+            # Channels picked from the MTX catalog: the default name is the channel label,
+            # users rename the entity from the Home Assistant UI
+            return self._config.name
         return f"{self._config.name} source"
 
     @property
     def unique_id(self) -> str:
+        if self._config.channel_key is not None:
+            serial = next(iter(self._device_info["identifiers"]))[1]
+            return f"{serial}_mtx_{self._config.channel_key}"
         return create_unique_id(self._config.name, EntityType.SOURCE)
 
     @property

@@ -76,6 +76,12 @@ you configure, and exactly one source can be selected at a time for each sink.
 
 ## MTX3 / MTX5-D
 
+On MTX devices the options dialog shows a channel picker: select input channels, stereo inputs, DCA groups,
+zones or output channels and each one becomes a media player with volume and mute. DCA groups use the group
+mute (1 = muted), which is handled automatically. "Limit volume to 0 dB" (enabled by default) maps 100% in
+Home Assistant to 0 dB instead of +10 dB. Entities are named after the channel (e.g. `CH1`, `DCA A`) and can
+be renamed from the Home Assistant UI. The JSON fields below are still available under "Advanced".
+
 The MTX series has no Remote Control Setup List. Instead, every `index_*` field accepts the parameter's
 memory address from section 7 of the protocol specification (`docs/`), as a string:
 

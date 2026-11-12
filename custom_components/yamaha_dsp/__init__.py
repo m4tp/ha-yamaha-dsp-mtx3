@@ -11,7 +11,13 @@ from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryError, ConfigEntryNotReady
 from homeassistant.helpers.device_registry import DeviceInfo
 
-from custom_components.yamaha_dsp.const import DOMAIN, MAX_NORMALIZED_VOLUME
+from custom_components.yamaha_dsp.const import (
+    DOMAIN,
+    MAX_NORMALIZED_VOLUME,
+    OPTION_MTX_CHANNELS,
+    OPTION_MTX_LIMIT_TO_0_DB,
+)
+from custom_components.yamaha_dsp.mtx import MTX_CHANNELS, NORMALIZED_0_DB
 from custom_components.yamaha_dsp.yamaha.command import Address, create_parameter
 from custom_components.yamaha_dsp.yamaha.device import ProductInformation, YamahaDspDevice
 
@@ -32,6 +38,9 @@ class SourceConfiguration:
     index_volume: Address
     index_mute: Address
     max_volume: int = MAX_NORMALIZED_VOLUME
+    invert_mute: bool = False
+    # Stable key for entities created from the MTX channel picker (None for JSON-configured sources)
+    channel_key: str | None = None
 
 
 @dataclass
@@ -126,6 +135,26 @@ def create_dsp_configuration(options) -> DspConfiguration:
                 _parse_address(parsed, "index_volume"),
                 _parse_address(parsed, "index_mute"),
                 _parse_max_volume(parsed),
+                bool(parsed.get("invert_mute", False)),
+            )
+        )
+
+    # MTX channels picked in the options flow
+    limit_to_0_db = options.get(OPTION_MTX_LIMIT_TO_0_DB, True)
+    for key in options.get(OPTION_MTX_CHANNELS) or []:
+        channel = MTX_CHANNELS.get(key)
+        if channel is None:
+            logger.warning(f"Ignoring unknown MTX channel '{key}'")
+            continue
+
+        dsp_configuration.sources.append(
+            SourceConfiguration(
+                channel.label,
+                channel.index_volume,
+                channel.index_mute,
+                NORMALIZED_0_DB if limit_to_0_db else MAX_NORMALIZED_VOLUME,
+                channel.mute_inverted,
+                channel.key,
             )
         )
 

@@ -1,0 +1,63 @@
+{
+  "config": {
+    "abort": {
+      "already_configured": "Dispositivo già configurato"
+    },
+    "error": {
+      "cannot_connect": "Impossibile connettersi"
+    },
+    "step": {
+      "user": {
+        "data": {
+          "host": "Host",
+          "port": "Porta"
+        }
+      }
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Configurazione DSP",
+        "description": "Configure the DSP. See the documentation for details about the format, as well as examples.",
+        "data": {
+          "default_speaker_sources": "Default speaker sources",
+          "speaker_configuration": "Speaker configuration",
+          "source_configuration": "Source configuration",
+          "route_configuration": "Route configuration"
+        },
+        "data_description": {
+          "default_speaker_sources": "Speaker source list to use if not explicitly defined in speaker configuration"
+        }
+      },
+      "mtx": {
+        "title": "Configurazione MTX",
+        "description": "Scegli i canali da controllare da Home Assistant. Ogni canale diventa un media player con volume e mute; puoi rinominare le entità dall'interfaccia di Home Assistant.",
+        "data": {
+          "mtx_channels": "Canali",
+          "mtx_limit_to_0_db": "Limita il volume a 0 dB"
+        },
+        "data_description": {
+          "mtx_channels": "Canali d'ingresso, ingressi stereo, gruppi DCA (livello e mute di gruppo), zone e canali d'uscita",
+          "mtx_limit_to_0_db": "Il 100% in Home Assistant corrisponde a 0 dB invece che a +10 dB"
+        },
+        "sections": {
+          "advanced": {
+            "name": "Avanzate (JSON)",
+            "description": "Configurazione manuale facoltativa per indirizzo dei parametri, vedi la documentazione.",
+            "data": {
+              "default_speaker_sources": "Sorgenti predefinite dei diffusori",
+              "speaker_configuration": "Configurazione diffusori",
+              "source_configuration": "Configurazione sorgenti",
+              "route_configuration": "Configurazione route",
+              "router_configuration": "Configurazione router"
+            }
+          }
+        }
+      }
+    },
+    "error": {
+      "invalid_configuration": "Configurazione non valida: controlla il JSON e gli indirizzi dei parametri"
+    }
+  }
+}
