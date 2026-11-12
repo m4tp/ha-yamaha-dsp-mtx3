@@ -1,4 +1,5 @@
 import asyncio
+import contextlib
 import logging
 import time
 
@@ -49,6 +50,8 @@ KEEPALIVE_MS = 60000
 HEARTBEAT_INTERVAL = 25
 # A link that died without closing (cable pulled) only shows up as commands timing out
 MAX_CONSECUTIVE_TIMEOUTS = 2
+# Event sent to event listeners when all parameters should be read again, see refresh()
+REFRESH_EVENT = "refresh"
 
 
 def reconnect_delay(attempt: int) -> float:
@@ -87,6 +90,8 @@ class YamahaDspDevice(TelnetDevice):
         self._consecutive_timeouts = 0
         # Reconnect automatically only once a connection has been established and until disconnect()
         self._auto_reconnect = False
+        # Set to cut the current reconnection delay short, see refresh()
+        self._retry_now = asyncio.Event()
 
         # Push notifications. Listeners are plain callbacks invoked from the response listener task:
         # they must not await or run device commands themselves, only schedule work.
@@ -192,7 +197,9 @@ class YamahaDspDevice(TelnetDevice):
         while True:
             delay = reconnect_delay(attempt)
             logger.info("Reconnecting to %s:%s in %s s", self._host, self._port, delay)
-            await asyncio.sleep(delay)
+            self._retry_now.clear()
+            with contextlib.suppress(TimeoutError):
+                await asyncio.wait_for(self._retry_now.wait(), delay)
             if self._response_listener_task is not None:
                 self._response_listener_task.cancel()
             try:
@@ -217,6 +224,18 @@ class YamahaDspDevice(TelnetDevice):
                 logger.warning("Heartbeat to %s:%s failed: %s", self._host, self._port, e)
                 self._connection_lost()
                 return
+
+    def start_reconnecting(self) -> None:
+        """Keeps trying to connect in the background, e.g. when the device is off while Home Assistant starts."""
+        self._auto_reconnect = True
+        self._connection_lost()
+
+    def refresh(self) -> None:
+        """Reconnects right away when disconnected, otherwise asks the entities to read all parameters again."""
+        if self._connected:
+            self._dispatch(self._event_listeners, REFRESH_EVENT)
+        else:
+            self._retry_now.set()
 
     def add_connection_listener(self, listener: ConnectionListener) -> Callable[[], None]:
         """Calls listener(True) after every (re)connection and listener(False) when the connection is lost."""

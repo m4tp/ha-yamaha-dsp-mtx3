@@ -4,6 +4,8 @@ from collections.abc import Callable
 
 from homeassistant.core import callback
 
+from custom_components.yamaha_dsp.yamaha.device import REFRESH_EVENT
+
 # Fader moves produce a burst of notifications: refresh once shortly after the last one
 PUSH_REFRESH_DELAY = 0.3
 PRESET_EVENTS = ("sscurrent", "ssrecall")
@@ -32,6 +34,8 @@ class PushUpdateMixin:
             self._unsubscribers.append(self._device.add_parameter_listener(parameter, self._on_parameter_notify))
         self._unsubscribers.append(self._device.add_event_listener(self._on_event_notify))
         self._unsubscribers.append(self._device.add_connection_listener(self._on_connection_change))
+        # Read all parameters right away (e.g. the matrix was just switched on), polling only runs every 5 minutes
+        self._schedule_refresh()
 
     @property
     def available(self) -> bool:
@@ -62,8 +66,8 @@ class PushUpdateMixin:
 
     @callback
     def _on_event_notify(self, kind: str) -> None:
-        # A preset recall changes every parameter
-        if self._refresh_on_preset_recall and kind in PRESET_EVENTS:
+        # A preset recall changes every parameter, REFRESH_EVENT comes from the refresh button
+        if kind == REFRESH_EVENT or (self._refresh_on_preset_recall and kind in PRESET_EVENTS):
             self._schedule_refresh()
 
     @callback

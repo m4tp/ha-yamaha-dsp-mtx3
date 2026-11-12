@@ -92,13 +92,18 @@ class EntityPushTests(unittest.TestCase):
         entity.hass = MagicMock()
 
         asyncio.run(entity.async_added_to_hass())
+        # All parameters are read as soon as the entity is added, without waiting for the 5 minute poll
+        entity.hass.loop.call_later.assert_called_once()
+        entity.hass.loop.call_later.reset_mock()
+
         notify(device, 'NOTIFY set MTX:mem_512/60000/0/0/0/0/0 0 0 -600 "-6.00"\n')
         notify(device, 'NOTIFY set MTX:mem_512/60000/0/0/0/0/0 0 0 -700 "-7.00"\n')
         notify(device, "NOTIFY sscurrent 3\n")
 
         # Debounced: each notification reschedules the same refresh
         self.assertEqual(3, entity.hass.loop.call_later.call_count)
-        self.assertEqual(2, entity.hass.loop.call_later.return_value.cancel.call_count)
+        # The first notification also replaces the still pending initial refresh
+        self.assertEqual(3, entity.hass.loop.call_later.return_value.cancel.call_count)
 
         asyncio.run(entity.async_will_remove_from_hass())
         notify(device, 'NOTIFY set MTX:mem_512/60000/0/0/0/0/0 0 0 -800 "-8.00"\n')

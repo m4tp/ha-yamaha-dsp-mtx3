@@ -13,6 +13,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryError, ConfigEntryNotReady
 from homeassistant.helpers.device_registry import DeviceInfo
 
+from custom_components.yamaha_dsp.config_flow import _is_mtx
 from custom_components.yamaha_dsp.const import (
     CONF_PRODUCT_NAME,
     DOMAIN,
@@ -90,7 +91,13 @@ class EntityType(Enum):
     PRESET = "preset"
 
 
-PLATFORMS: list[Platform] = [Platform.MEDIA_PLAYER, Platform.SWITCH, Platform.SELECT, Platform.SENSOR]
+PLATFORMS: list[Platform] = [
+    Platform.MEDIA_PLAYER,
+    Platform.SWITCH,
+    Platform.SELECT,
+    Platform.SENSOR,
+    Platform.BUTTON,
+]
 UNIQUE_ID_REGEXP = re.compile(r"[\s+]")
 
 logger = logging.getLogger(__name__)
@@ -205,7 +212,8 @@ def create_dsp_configuration(options) -> DspConfiguration:
 @dataclass
 class RuntimeData:
     device: YamahaDspDevice
-    product_information: ProductInformation
+    # None when the device was off while the entry was set up
+    product_information: ProductInformation | None
     device_info: DeviceInfo
     dsp_configuration: DspConfiguration
     supports_presets: bool = False
@@ -218,39 +226,57 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     else:
         raise KeyError("Config entry is missing required parameters")
 
-    # Verify that we can connect, store device handle and product/device information
+    # Build the DSP configuration based on the configuration given by the option flow
+    try:
+        dsp_configuration = create_dsp_configuration(entry.options)
+    except ValueError as e:  # includes json.JSONDecodeError
+        raise ConfigEntryError() from e
+
+    product_information: ProductInformation | None = None
     try:
         await device.connect()
         product_information = await device.query_product_information()
+    except (OSError, RuntimeError) as e:  # refused, unreachable, handshake timeout
+        await device.disconnect()
+        # The entry's unique ID is the serial number, so entities can be set up without the device
+        if entry.unique_id is None:
+            raise ConfigEntryNotReady("Unable to connect") from e
+        logger.warning(
+            "%s is unreachable (%s), its entities stay unavailable until it is switched on", entry.data["host"], e
+        )
+        device.start_reconnecting()
 
-        # Entries created before 0.4.0 only have the product name in their title, which users can change
-        if entry.data.get(CONF_PRODUCT_NAME) != product_information.product_name:
-            hass.config_entries.async_update_entry(
-                entry, data={**entry.data, CONF_PRODUCT_NAME: product_information.product_name}
-            )
-
+    if product_information is not None:
+        _store_product_name(hass, entry, product_information.product_name)
+        serial = product_information.serial_number
         device_info = DeviceInfo(
-            identifiers={(DOMAIN, product_information.serial_number)},
+            identifiers={(DOMAIN, serial)},
             manufacturer="Yamaha",
             model=product_information.product_name,
             model_id=product_information.device_id,
-            serial_number=product_information.serial_number,
+            serial_number=serial,
             sw_version=product_information.firmware_version,
         )
+    else:
+        # Fields left out keep the values stored in the device registry by earlier runs
+        device_info = DeviceInfo(identifiers={(DOMAIN, entry.unique_id)}, manufacturer="Yamaha")
 
-        # Build the DSP configuration based on the configuration given by the option flow
-        dsp_configuration = create_dsp_configuration(entry.options)
+        # Entries without a stored product name don't know yet whether they control an MTX: learn it once
+        # the device is on, the entry update reloads it (e.g. to add the Preset select)
+        if CONF_PRODUCT_NAME not in entry.data:
 
-        # MTX3/MTX5-D presets are recalled with ssrecall (the MRX7-D uses snapshots instead)
-        supports_presets = product_information.product_name.upper().startswith("MTX")
+            def on_connection_change(connected: bool) -> None:
+                if connected:
+                    entry.async_create_background_task(
+                        hass, _learn_product_name(hass, entry, device), "yamaha_dsp product name"
+                    )
 
-        entry.runtime_data = RuntimeData(device, product_information, device_info, dsp_configuration, supports_presets)
-    except (OSError, RuntimeError) as e:  # refused, unreachable, handshake timeout
-        await device.disconnect()
-        raise ConfigEntryNotReady("Unable to connect") from e
-    except ValueError as e:  # includes json.JSONDecodeError
-        await device.disconnect()
-        raise ConfigEntryError() from e
+            entry.async_on_unload(device.add_connection_listener(on_connection_change))
+
+    # MTX3/MTX5-D presets are recalled with ssrecall (the MRX7-D uses snapshots instead)
+    supports_presets = _is_mtx(entry)
+
+    entry.runtime_data = RuntimeData(device, product_information, device_info, dsp_configuration, supports_presets)
 
     # Register a listener for option updates
     entry.async_on_unload(entry.add_update_listener(entry_update_listener))
@@ -263,6 +289,21 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         entry.async_create_background_task(hass, _request_meters(device), "yamaha_dsp meter requests")
 
     return True
+
+
+def _store_product_name(hass: HomeAssistant, entry: ConfigEntry, product_name: str) -> None:
+    # Entries created before 0.4.0 only have the product name in their title, which users can change
+    if entry.data.get(CONF_PRODUCT_NAME) != product_name:
+        hass.config_entries.async_update_entry(entry, data={**entry.data, CONF_PRODUCT_NAME: product_name})
+
+
+async def _learn_product_name(hass: HomeAssistant, entry: ConfigEntry, device: YamahaDspDevice) -> None:
+    try:
+        product_information = await device.query_product_information()
+    except Exception as e:  # retried at the next reconnection
+        logger.debug("Could not read the product name: %s", e)
+        return
+    _store_product_name(hass, entry, product_information.product_name)
 
 
 METER_REQUEST_PERIOD = 5  # seconds, must stay well below the 10 second transmission window
