@@ -1,9 +1,9 @@
 # ha-yamaha-dsp
 
-[![Linting](https://github.com/NitorCreations/ha-yamaha-dsp/actions/workflows/ruff.yaml/badge.svg)](https://github.com/NitorCreations/ha-yamaha-dsp/actions/workflows/ruff.yaml)
-[![Tests](https://github.com/NitorCreations/ha-yamaha-dsp/actions/workflows/unittest.yaml/badge.svg)](https://github.com/NitorCreations/ha-yamaha-dsp/actions/workflows/unittest.yaml)
+[![Linting](https://github.com/m4tp/ha-yamaha-dsp-mtx3/actions/workflows/ruff.yaml/badge.svg)](https://github.com/m4tp/ha-yamaha-dsp-mtx3/actions/workflows/ruff.yaml)
+[![Tests](https://github.com/m4tp/ha-yamaha-dsp-mtx3/actions/workflows/unittest.yaml/badge.svg)](https://github.com/m4tp/ha-yamaha-dsp-mtx3/actions/workflows/unittest.yaml)
 
-[![Open your Home Assistant instance and open a repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=NitorCreations&repository=ha-yamaha-dsp&category=integration)
+[![Open your Home Assistant instance and open a repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=m4tp&repository=ha-yamaha-dsp-mtx3&category=integration)
 
 Home Assistant integration for controlling Yamaha DSP processors such as the MRX7-D.
 
