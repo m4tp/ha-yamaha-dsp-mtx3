@@ -14,7 +14,8 @@ class PushUpdateMixin:
 
     Subclasses set self._device and implement _push_parameters(). Values are queried again instead of being
     taken from the notification, because notifications carry raw values while entities may use normalized ones.
-    Polling stays enabled as a fallback for notifications lost during a reconnect.
+    Entities are unavailable while the connection is down and refresh after every reconnection, so that
+    notifications missed in the meantime are recovered. Slow polling (SCAN_INTERVAL) stays as a safety net.
     """
 
     _refresh_on_preset_recall = True
@@ -30,6 +31,16 @@ class PushUpdateMixin:
         for parameter in self._push_parameters():
             self._unsubscribers.append(self._device.add_parameter_listener(parameter, self._on_parameter_notify))
         self._unsubscribers.append(self._device.add_event_listener(self._on_event_notify))
+        self._unsubscribers.append(self._device.add_connection_listener(self._on_connection_change))
+
+    @property
+    def available(self) -> bool:
+        return self._device.is_connected()
+
+    async def async_device_update(self, warning: bool = True) -> None:
+        # Don't send commands (and log a failure per entity) while the device is unreachable
+        if self._device.is_connected():
+            await super().async_device_update(warning)
 
     async def async_will_remove_from_hass(self) -> None:
         for unsubscribe in self._unsubscribers:
@@ -54,6 +65,13 @@ class PushUpdateMixin:
         # A preset recall changes every parameter
         if self._refresh_on_preset_recall and kind in PRESET_EVENTS:
             self._schedule_refresh()
+
+    @callback
+    def _on_connection_change(self, connected: bool) -> None:
+        if connected:
+            self._schedule_refresh()
+        elif self.hass is not None:
+            self.async_write_ha_state()
 
     @callback
     def _schedule_refresh(self) -> None:

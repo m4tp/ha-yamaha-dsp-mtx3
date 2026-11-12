@@ -122,6 +122,7 @@ class MeterSensorTests(unittest.TestCase):
 
     def test_sensor_follows_meter(self):
         device = YamahaDspDevice("127.0.0.1", 49280)
+        device._connected = True  # sensors are unavailable while disconnected
         source = create_dsp_configuration({"mtx_channels": ["input_2"], "mtx_meters": True}).sources[0]
         sensor = MeterSensorEntity(source, device, DEVICE_INFO)
         sensor.hass = MagicMock()

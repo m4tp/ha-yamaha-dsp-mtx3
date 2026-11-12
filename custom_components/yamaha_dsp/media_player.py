@@ -1,5 +1,7 @@
 import logging
 
+from datetime import timedelta
+
 from bidict import bidict
 from homeassistant.components.media_player import (
     MediaPlayerDeviceClass,
@@ -22,6 +24,9 @@ from custom_components.yamaha_dsp.push import PushUpdateMixin
 from custom_components.yamaha_dsp.yamaha.command import Address, create_parameter
 
 logger = logging.getLogger(__name__)
+
+# Push notifications keep entities up to date, polling is only a safety net
+SCAN_INTERVAL = timedelta(minutes=5)
 
 
 async def async_setup_entry(_hass: HomeAssistant, entry, async_add_entities):
@@ -158,9 +163,9 @@ class SpeakerEntity(YamahaDspMediaPlayerEntity):
     async def async_select_source(self, source: str) -> None:
         source_idx = self._source_bidict.inverse.get(source)
         if source_idx is None:
-            logger.error(f"Asked to switch to invalid source {source}")
+            logger.error("Asked to switch to invalid source %s", source)
         else:
-            logger.debug(f"Switching source on {self.name} to {source} ({source_idx})")
+            logger.debug("Switching source on %s to %s (%s)", self.name, source, source_idx)
             await self._device.set_parameter_raw(self._source_param, "0", "0", str(source_idx))
 
 

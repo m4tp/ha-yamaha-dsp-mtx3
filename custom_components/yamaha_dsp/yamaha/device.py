@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import time
 
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -8,6 +9,7 @@ from pytelnetdevice import TelnetDevice
 
 from custom_components.yamaha_dsp.yamaha.command import ParameterValueType
 from custom_components.yamaha_dsp.yamaha.response import (
+    ErrorResponse,
     NotifyResponse,
     OkResponse,
     PresetInfo,
@@ -22,6 +24,7 @@ from custom_components.yamaha_dsp.yamaha.response import (
 ParameterListener = Callable[[str], None]
 MeterListener = Callable[[list[int]], None]
 EventListener = Callable[[str], None]
+ConnectionListener = Callable[[bool], None]
 
 
 @dataclass
@@ -38,19 +41,59 @@ class ProductInformation:
 logger = logging.getLogger(__name__)
 
 
+# Delays between reconnection attempts after the connection was lost, the last one repeats
+RECONNECT_BACKOFF = (1, 2, 5, 10, 30)
+# The device drops a session that sends nothing for this long, so half-open sockets don't block new connections
+KEEPALIVE_MS = 60000
+# Seconds without outgoing traffic before a heartbeat command is sent, well below KEEPALIVE_MS
+HEARTBEAT_INTERVAL = 25
+# A link that died without closing (cable pulled) only shows up as commands timing out
+MAX_CONSECUTIVE_TIMEOUTS = 2
+
+
+def reconnect_delay(attempt: int) -> float:
+    return RECONNECT_BACKOFF[min(attempt, len(RECONNECT_BACKOFF) - 1)]
+
+
+def _normalize_option(option: str) -> str:
+    # Firmware V2.02 and earlier echo index addresses zero-padded (MTX:Index_002)
+    if option.startswith("MTX:Index_") and option[len("MTX:Index_") :].isdigit():
+        return f"MTX:Index_{int(option[len('MTX:Index_') :])}"
+    return option
+
+
+def response_matches(command: str, response: Response) -> bool:
+    """OK repeats the command name and its first option (the address), ERROR repeats only the command name."""
+    parts = command.split()
+    if len(response.parsed_response) < 2 or response.parsed_response[1] != parts[0]:
+        return False
+    if isinstance(response, ErrorResponse) or len(parts) < 2:
+        return True
+    return len(response.parsed_response) > 2 and _normalize_option(response.parsed_response[2]) == _normalize_option(
+        parts[1]
+    )
+
+
 class YamahaDspDevice(TelnetDevice):
     def __init__(self, host: str, port: int, timeout: int = 5):
         super().__init__(host, port)
         self._timeout = timeout
         self._response_listener_task: asyncio.Task | None = None
-        self._last_command_response: Response | Exception | None = None
-        self._command_response_received = asyncio.Event()
+        self._heartbeat_task: asyncio.Task | None = None
+        self._reconnect_task: asyncio.Task | None = None
+        # Command waiting for its response and the future that receives it
+        self._pending: tuple[str, asyncio.Future] | None = None
+        self._last_sent = 0.0
+        self._consecutive_timeouts = 0
+        # Reconnect automatically only once a connection has been established and until disconnect()
+        self._auto_reconnect = False
 
         # Push notifications. Listeners are plain callbacks invoked from the response listener task:
         # they must not await or run device commands themselves, only schedule work.
         self._parameter_listeners: dict[str, list[ParameterListener]] = {}
         self._meter_listeners: dict[str, list[MeterListener]] = {}
         self._event_listeners: list[EventListener] = []
+        self._connection_listeners: list[ConnectionListener] = []
 
     async def after_connect(self):
         # Start the response listener
@@ -58,32 +101,136 @@ class YamahaDspDevice(TelnetDevice):
 
         # A handshake must be performed before the device will accept commands
         await self._perform_handshake()
+        try:
+            await self._run_command(f"scpmode keepalive {KEEPALIVE_MS}")
+        except ResponseError as e:
+            logger.warning("Device does not support keepalive: %s", e)
+
+        self._heartbeat_task = asyncio.create_task(self._heartbeat())
+        self._auto_reconnect = True
+        logger.info("Connected to %s:%s", self._host, self._port)
+        self._dispatch(self._connection_listeners, True)
 
     async def before_disconnect(self):
-        # Cancel the response listener task
-        self._response_listener_task.cancel()
+        self._auto_reconnect = False
+        for task in (self._reconnect_task, self._heartbeat_task, self._response_listener_task):
+            if task is not None and task is not asyncio.current_task():
+                task.cancel()
+
+    async def disconnect(self):
+        await self.before_disconnect()
+        self._connected = False
+        self._fail_pending()
+        await self._close_transport()
+
+    async def _close_transport(self):
+        if self._writer is None:
+            return
+        try:
+            self._writer.close()
+            await self._writer.wait_closed()
+        except OSError:
+            pass  # we're closing the connection anyway
+
+    async def _read_line(self) -> str | None:
+        try:
+            return (await self._reader.readuntil(b"\n")).decode()
+        except asyncio.IncompleteReadError:
+            return None  # EOF
 
     async def _response_listener(self):
-        while True:
-            raw_resp = await self._read_until("\n")
-
-            # Exit the loop if we read nothing, the other layers will
-            # handle the underlying error
-            if raw_resp is None:
-                return
-
-            try:
-                resp = parse_response(raw_resp)
+        try:
+            while (raw_resp := await self._read_line()) is not None:
+                try:
+                    resp = parse_response(raw_resp)
+                except (ValueError, IndexError) as e:
+                    logger.warning("Response listener received a response it couldn't handle: %s (%r)", e, raw_resp)
+                    continue
 
                 if isinstance(resp, NotifyResponse):
                     await self._handle_notify_response(resp)
                 else:
-                    self._last_command_response = resp
-                    self._command_response_received.set()
-            except ValueError as e:
-                logger.error(f"Response listener received a response it couldn't handle: {e}")
-                self._last_command_response = e
-                self._command_response_received.set()
+                    self._handle_command_response(resp)
+            logger.warning("Connection to %s:%s closed by the device", self._host, self._port)
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            logger.warning("Connection to %s:%s lost: %s", self._host, self._port, e)
+        self._connection_lost()
+
+    def _handle_command_response(self, response: Response) -> None:
+        if self._pending is None or not response_matches(self._pending[0], response):
+            # E.g. the response to a command that already timed out
+            logger.debug("Discarding unexpected response: %s", response.raw_response)
+            return
+        future = self._pending[1]
+        if not future.done():
+            future.set_result(response)
+
+    def _fail_pending(self) -> None:
+        if self._pending is not None and not self._pending[1].done():
+            self._pending[1].set_exception(ConnectionError("Connection lost"))
+
+    def _connection_lost(self) -> None:
+        """Marks the connection as lost, fails the pending command and starts reconnecting (once)."""
+        was_connected = self._connected
+        self._connected = False
+        self._consecutive_timeouts = 0
+        self._fail_pending()
+        if self._writer is not None:
+            self._writer.close()
+        if self._heartbeat_task is not None and self._heartbeat_task is not asyncio.current_task():
+            self._heartbeat_task.cancel()
+
+        if self._auto_reconnect and (self._reconnect_task is None or self._reconnect_task.done()):
+            self._reconnect_task = asyncio.create_task(self._reconnect_loop())
+        if was_connected:
+            self._dispatch(self._connection_listeners, False)
+
+    async def _reconnect_loop(self):
+        attempt = 0
+        while True:
+            delay = reconnect_delay(attempt)
+            logger.info("Reconnecting to %s:%s in %s s", self._host, self._port, delay)
+            await asyncio.sleep(delay)
+            if self._response_listener_task is not None:
+                self._response_listener_task.cancel()
+            try:
+                await self.connect()
+                return
+            except Exception as e:  # unreachable, refused, handshake timeout, ...
+                logger.debug("Reconnection attempt %s failed: %s", attempt + 1, e)
+                self._connected = False
+                await self._close_transport()
+            attempt += 1
+
+    async def _heartbeat(self):
+        while True:
+            await asyncio.sleep(HEARTBEAT_INTERVAL - (time.monotonic() - self._last_sent))
+            if time.monotonic() - self._last_sent < HEARTBEAT_INTERVAL:
+                continue  # other commands kept the connection alive
+            try:
+                await self._run_command("devstatus runmode")
+            except ResponseError:
+                pass  # the device answered, so the connection works
+            except Exception as e:
+                logger.warning("Heartbeat to %s:%s failed: %s", self._host, self._port, e)
+                self._connection_lost()
+                return
+
+    def add_connection_listener(self, listener: ConnectionListener) -> Callable[[], None]:
+        """Calls listener(True) after every (re)connection and listener(False) when the connection is lost."""
+        self._connection_listeners.append(listener)
+
+        def remove() -> None:
+            if listener in self._connection_listeners:
+                self._connection_listeners.remove(listener)
+
+        return remove
+
+    def active_meters(self) -> list[str]:
+        """Meters that have at least one listener, i.e. an enabled sensor added to Home Assistant."""
+        return sorted(meter for meter, listeners in self._meter_listeners.items() if listeners)
 
     async def _handle_notify_response(self, response: NotifyResponse):
         parts = response.parsed_response
@@ -93,12 +240,12 @@ class YamahaDspDevice(TelnetDevice):
             try:
                 address, values = parse_meter_notification(response.raw_response)
             except ValueError as e:
-                logger.debug(f"Ignoring meter notification: {e}")
+                logger.debug("Ignoring meter notification: %s", e)
                 return
             self._dispatch(self._meter_listeners.get(address, []), values)
             return
 
-        logger.debug(f"Got NOTIFY response: {response.raw_response}")
+        logger.debug("Got NOTIFY response: %s", response.raw_response)
 
         if kind in ("set", "setn") and len(parts) > 2:
             # NOTIFY set MTX:mem_512/60001/0/0/0/0/0 0 0 1 "ON" -> raw value is the 6th field
@@ -148,38 +295,41 @@ class YamahaDspDevice(TelnetDevice):
     async def _send_command(self, command):
         self._writer.write(f"{command}\n".encode())
         await self._writer.drain()
-
-    async def _wait_for_response(self):
-        await self._command_response_received.wait()
+        self._last_sent = time.monotonic()
 
     async def _run_command(self, command: str) -> OkResponse:
-        try:
-            async with self._semaphore:
-                logger.debug(f"Sending command: {command}")
-                # Send the command
-                await asyncio.wait_for(self._send_command(command), self._timeout)
+        if not self._connected:
+            raise ConnectionError("Not connected")
 
-                # Wait for the response
-                await asyncio.wait_for(self._wait_for_response(), self._timeout)
-                resp = self._last_command_response
-                self._command_response_received.clear()
-
-                if isinstance(resp, OkResponse):
-                    logger.debug(f"Received response: {resp.raw_response}")
-                    return resp
-                elif isinstance(resp, Exception):
-                    raise ResponseError(resp) from resp
-                else:
-                    raise ResponseError(resp)
-        except TimeoutError:
-            raise RuntimeError("Command timed out")
-        except (ConnectionResetError, BrokenPipeError):
-            await self.disconnect()
-            raise RuntimeError("Connection was reset")
-        finally:
+        async with self._semaphore:
             if not self._connected:
-                logger.error("Connection seems to be broken, will attempt to reconnect")
-                await self.reconnect()
+                raise ConnectionError("Not connected")
+
+            future = asyncio.get_running_loop().create_future()
+            self._pending = (command, future)
+            try:
+                logger.debug("Sending command: %s", command)
+                await asyncio.wait_for(self._send_command(command), self._timeout)
+                resp = await asyncio.wait_for(future, self._timeout)
+            except TimeoutError:
+                self._consecutive_timeouts += 1
+                if self._consecutive_timeouts >= MAX_CONSECUTIVE_TIMEOUTS:
+                    logger.warning("%s commands in a row timed out", self._consecutive_timeouts)
+                    self._connection_lost()
+                raise RuntimeError("Command timed out") from None
+            except ConnectionError:
+                raise
+            except OSError as e:  # broken pipe, connection reset, ...
+                self._connection_lost()
+                raise ConnectionError("Connection lost") from e
+            finally:
+                self._pending = None
+            self._consecutive_timeouts = 0
+
+        if isinstance(resp, OkResponse):
+            logger.debug("Received response: %s", resp.raw_response)
+            return resp
+        raise ResponseError(resp)
 
     async def _perform_handshake(self):
         await self._run_command("devstatus runmode")
@@ -245,7 +395,7 @@ class YamahaDspDevice(TelnetDevice):
             try:
                 info = await self.query_preset_info(index)
             except (ResponseError, ValueError) as e:
-                logger.debug(f"Skipping preset {index}: {e}")
+                logger.debug("Skipping preset %s: %s", index, e)
                 continue
 
             if info.is_user_preset:

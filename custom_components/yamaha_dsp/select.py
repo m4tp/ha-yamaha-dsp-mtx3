@@ -1,5 +1,7 @@
 import logging
 
+from datetime import timedelta
+
 from bidict import bidict
 from homeassistant.components.select import SelectEntity
 from homeassistant.core import HomeAssistant
@@ -16,6 +18,9 @@ from custom_components.yamaha_dsp.push import PushUpdateMixin
 from custom_components.yamaha_dsp.yamaha.command import create_parameter
 
 logger = logging.getLogger(__name__)
+
+# Push notifications keep entities up to date, polling is only a safety net
+SCAN_INTERVAL = timedelta(minutes=5)
 
 
 async def async_setup_entry(_hass: HomeAssistant, entry, async_add_entities):
