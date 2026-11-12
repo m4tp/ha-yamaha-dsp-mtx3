@@ -11,7 +11,7 @@ from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.event import async_track_time_interval
 
 from custom_components.yamaha_dsp import RuntimeData, SourceConfiguration, YamahaDspDevice
-from custom_components.yamaha_dsp.yamaha.response import meter_value_to_dbfs
+from custom_components.yamaha_dsp.yamaha.response import METER_OVER, meter_value_to_dbfs
 
 # The device streams meters every second while they are requested, see _request_meters in __init__.py
 STALE_AFTER = 15  # seconds without data before the sensor becomes unavailable
@@ -36,6 +36,8 @@ class MeterSensorEntity(SensorEntity):
     _attr_state_class = SensorStateClass.MEASUREMENT
     _attr_icon = "mdi:waveform"
     _attr_suggested_display_precision = 0
+    # Clipping flips often while a channel is hot, there's no point in storing it
+    _unrecorded_attributes = frozenset({"clipping"})
 
     def __init__(self, config: SourceConfiguration, device: YamahaDspDevice, device_info: DeviceInfo):
         self._config = config
@@ -44,6 +46,7 @@ class MeterSensorEntity(SensorEntity):
         self._meter_address, self._position = config.meter
 
         self._value: int | None = None
+        self._clipping = False
         self._last_update = 0.0
         self._unsubscribers: list[Callable[[], None]] = []
 
@@ -62,14 +65,23 @@ class MeterSensorEntity(SensorEntity):
 
     @property
     def available(self) -> bool:
-        return self._value is not None and time.monotonic() - self._last_update < STALE_AFTER
+        return (
+            self._device.is_connected()
+            and self._value is not None
+            and time.monotonic() - self._last_update < STALE_AFTER
+        )
 
     @property
     def native_value(self) -> int | None:
         return self._value
 
+    @property
+    def extra_state_attributes(self) -> dict:
+        return {"clipping": self._clipping}
+
     async def async_added_to_hass(self) -> None:
         self._unsubscribers.append(self._device.add_meter_listener(self._meter_address, self._on_meter))
+        self._unsubscribers.append(self._device.add_connection_listener(self._on_connection_change))
         self._unsubscribers.append(async_track_time_interval(self.hass, self._check_stale, STALE_CHECK_INTERVAL))
 
     async def async_will_remove_from_hass(self) -> None:
@@ -83,12 +95,19 @@ class MeterSensorEntity(SensorEntity):
             return
 
         value = meter_value_to_dbfs(values[self._position])
+        clipping = values[self._position] == METER_OVER
         was_available = self.available
         self._last_update = time.monotonic()
 
         # Only write when something changed, to keep the recorder load down
-        if value != self._value or not was_available:
+        if value != self._value or clipping != self._clipping or not was_available:
             self._value = value
+            self._clipping = clipping
+            self.async_write_ha_state()
+
+    @callback
+    def _on_connection_change(self, connected: bool) -> None:
+        if not connected and self._value is not None:
             self.async_write_ha_state()
 
     @callback

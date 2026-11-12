@@ -19,6 +19,7 @@ from homeassistant.helpers.selector import (
 from custom_components.yamaha_dsp.const import (
     CONF_HOST,
     CONF_PORT,
+    CONF_PRODUCT_NAME,
     DOMAIN,
     OPTION_ADVANCED,
     OPTION_DEFAULT_SPEAKER_SOURCES,
@@ -71,7 +72,8 @@ class YamahaDspConfigFlow(ConfigFlow, domain=DOMAIN):
             except (BrokenPipeError, ConnectionError, OSError):  # all technically OSError
                 errors["base"] = "cannot_connect"
             else:
-                return self.async_create_entry(title=title, data=user_input)
+                data = {**user_input, CONF_PRODUCT_NAME: product_information.product_name}
+                return self.async_create_entry(title=title, data=data)
 
         return self.async_show_form(step_id="user", data_schema=STEP_USER_DATA_SCHEMA, errors=errors)
 
@@ -90,7 +92,9 @@ JSON_OPTIONS = [
 
 
 def _is_mtx(config_entry: ConfigEntry) -> bool:
-    # The entry title is "Yamaha <product name>", see YamahaDspConfigFlow
+    if product_name := config_entry.data.get(CONF_PRODUCT_NAME):
+        return product_name.upper().startswith("MTX")
+    # Older entry whose device was never reachable since the update: the default title is "Yamaha <product name>"
     return config_entry.title.upper().startswith("YAMAHA MTX")
 
 
@@ -152,7 +156,7 @@ class YamahaDspOptionsFlow(OptionsFlow):
 
                 create_dsp_configuration(data)
             except (ValueError, KeyError, TypeError) as e:
-                logger.warning(f"Invalid DSP configuration: {e}")
+                logger.warning("Invalid DSP configuration: %s", e)
                 errors["base"] = "invalid_configuration"
             else:
                 return self.async_create_entry(title="", data=data)

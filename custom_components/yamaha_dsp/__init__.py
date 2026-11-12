@@ -1,4 +1,5 @@
 import asyncio
+import contextlib
 import json
 import logging
 import re
@@ -13,6 +14,7 @@ from homeassistant.exceptions import ConfigEntryError, ConfigEntryNotReady
 from homeassistant.helpers.device_registry import DeviceInfo
 
 from custom_components.yamaha_dsp.const import (
+    CONF_PRODUCT_NAME,
     DOMAIN,
     MAX_NORMALIZED_VOLUME,
     OPTION_MTX_CHANNELS,
@@ -149,7 +151,7 @@ def create_dsp_configuration(options) -> DspConfiguration:
     for key in options.get(OPTION_MTX_CHANNELS) or []:
         channel = MTX_CHANNELS.get(key)
         if channel is None:
-            logger.warning(f"Ignoring unknown MTX channel '{key}'")
+            logger.warning("Ignoring unknown MTX channel '%s'", key)
             continue
 
         dsp_configuration.sources.append(
@@ -220,6 +222,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     try:
         await device.connect()
         product_information = await device.query_product_information()
+
+        # Entries created before 0.4.0 only have the product name in their title, which users can change
+        if entry.data.get(CONF_PRODUCT_NAME) != product_information.product_name:
+            hass.config_entries.async_update_entry(
+                entry, data={**entry.data, CONF_PRODUCT_NAME: product_information.product_name}
+            )
+
         device_info = DeviceInfo(
             identifiers={(DOMAIN, product_information.serial_number)},
             manufacturer="Yamaha",
@@ -236,25 +245,22 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         supports_presets = product_information.product_name.upper().startswith("MTX")
 
         entry.runtime_data = RuntimeData(device, product_information, device_info, dsp_configuration, supports_presets)
-    except ConnectionError as e:
+    except (OSError, RuntimeError) as e:  # refused, unreachable, handshake timeout
+        await device.disconnect()
         raise ConfigEntryNotReady("Unable to connect") from e
-    except json.JSONDecodeError as e:
-        raise ConfigEntryError() from e
-    except ValueError as e:
+    except ValueError as e:  # includes json.JSONDecodeError
+        await device.disconnect()
         raise ConfigEntryError() from e
 
     # Register a listener for option updates
     entry.async_on_unload(entry.add_update_listener(entry_update_listener))
 
-    logger.info(f"Initializing entry with runtime data: {entry.runtime_data}")
+    logger.info("Initializing entry with runtime data: %s", entry.runtime_data)
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
     # Level meters are streamed by the device for 10 seconds after each request
-    meters = sorted({source.meter[0] for source in dsp_configuration.sources if source.meter is not None})
-    if meters:
-        entry.async_create_background_task(
-            hass, _request_meters(entry.runtime_data.device, meters), "yamaha_dsp meter requests"
-        )
+    if any(source.meter is not None for source in dsp_configuration.sources):
+        entry.async_create_background_task(hass, _request_meters(device), "yamaha_dsp meter requests")
 
     return True
 
@@ -263,14 +269,23 @@ METER_REQUEST_PERIOD = 5  # seconds, must stay well below the 10 second transmis
 METER_INTERVAL_MS = 1000
 
 
-async def _request_meters(device: YamahaDspDevice, meters: list[str]) -> None:
-    while True:
-        for meter in meters:
-            try:
-                await device.request_meter(meter, METER_INTERVAL_MS)
-            except Exception as e:  # connection problems are retried on the next round
-                logger.debug(f"Meter request for {meter} failed: {e}")
-        await asyncio.sleep(METER_REQUEST_PERIOD)
+async def _request_meters(device: YamahaDspDevice) -> None:
+    # Renew the requests right away after a reconnection instead of waiting for the next round
+    reconnected = asyncio.Event()
+    remove_listener = device.add_connection_listener(lambda connected: connected and reconnected.set())
+    try:
+        while True:
+            reconnected.clear()
+            # Only meters with an enabled sensor added to Home Assistant have listeners
+            for meter in device.active_meters() if device.is_connected() else []:
+                try:
+                    await device.request_meter(meter, METER_INTERVAL_MS)
+                except Exception as e:  # connection problems are retried on the next round
+                    logger.debug("Meter request for %s failed: %s", meter, e)
+            with contextlib.suppress(TimeoutError):
+                await asyncio.wait_for(reconnected.wait(), METER_REQUEST_PERIOD)
+    finally:
+        remove_listener()
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:

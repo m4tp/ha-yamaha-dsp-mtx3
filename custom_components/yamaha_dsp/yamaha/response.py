@@ -94,6 +94,7 @@ def parse_current_preset(raw_response: str) -> int:
 
 # Meter values are 2-digit hexadecimal numbers, 0x00 = -126 dBFS or less, 0x7E = 0 dBFS, 0x7F = over
 METER_ZERO_DBFS = 0x7E
+METER_OVER = 0x7F
 
 
 def meter_value_to_dbfs(value: int) -> int:

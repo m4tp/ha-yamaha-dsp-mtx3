@@ -5,6 +5,7 @@ MAX_NORMALIZED_VOLUME = 1000
 
 CONF_HOST = "host"
 CONF_PORT = "port"
+CONF_PRODUCT_NAME = "product_name"
 
 OPTION_DEFAULT_SPEAKER_SOURCES = "default_speaker_sources"
 OPTION_SPEAKER_CONFIGURATION = "speaker_configuration"
