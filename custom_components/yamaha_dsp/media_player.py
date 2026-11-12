@@ -18,7 +18,7 @@ from custom_components.yamaha_dsp import (
     YamahaDspDevice,
     create_unique_id,
 )
-from custom_components.yamaha_dsp.yamaha.command import create_index_parameter
+from custom_components.yamaha_dsp.yamaha.command import Address, create_parameter
 
 logger = logging.getLogger(__name__)
 
@@ -40,7 +40,14 @@ async def async_setup_entry(_hass: HomeAssistant, entry, async_add_entities):
 
 
 class YamahaDspMediaPlayerEntity(MediaPlayerEntity):
-    def __init__(self, device: YamahaDspDevice, device_info: DeviceInfo, index_volume: int, index_mute: int):
+    def __init__(
+        self,
+        device: YamahaDspDevice,
+        device_info: DeviceInfo,
+        index_volume: Address,
+        index_mute: Address,
+        max_volume: int,
+    ):
         self._device = device
         self._device_info = device_info
 
@@ -48,8 +55,9 @@ class YamahaDspMediaPlayerEntity(MediaPlayerEntity):
         self._volume = 0
         self._muted = False
 
-        self._volume_param = create_index_parameter(index_volume)
-        self._mute_param = create_index_parameter(index_mute)
+        self._max_volume = max_volume
+        self._volume_param = create_parameter(index_volume)
+        self._mute_param = create_parameter(index_mute)
 
     @property
     def device_info(self) -> DeviceInfo:
@@ -61,7 +69,10 @@ class YamahaDspMediaPlayerEntity(MediaPlayerEntity):
 
     @property
     def volume_level(self) -> float:
-        return self._volume / 1000 if self._volume > 0 else 0
+        if self._volume <= 0:
+            return 0
+        # Volume above the configured ceiling (e.g. set from MTX-MRX Editor) is shown as 100%
+        return min(self._volume / self._max_volume, 1.0)
 
     @property
     def volume_step(self) -> float:
@@ -81,12 +92,12 @@ class YamahaDspMediaPlayerEntity(MediaPlayerEntity):
         await self._device.set_parameter_raw(self._mute_param, "0", "0", "0" if mute else "1")
 
     async def async_set_volume_level(self, volume: float) -> None:
-        await self._device.set_parameter_normalized(self._volume_param, "0", "0", str(int(volume * 1000)))
+        await self._device.set_parameter_normalized(self._volume_param, "0", "0", str(round(volume * self._max_volume)))
 
 
 class SpeakerEntity(YamahaDspMediaPlayerEntity):
     def __init__(self, config: SpeakerConfiguration, device: YamahaDspDevice, device_info: DeviceInfo):
-        super().__init__(device, device_info, config.index_volume, config.index_mute)
+        super().__init__(device, device_info, config.index_volume, config.index_mute, config.max_volume)
         self._config = config
 
         self._source = None
@@ -94,7 +105,7 @@ class SpeakerEntity(YamahaDspMediaPlayerEntity):
             {i + 1: self._config.available_inputs[i] for i in range(len(self._config.available_inputs))}
         )
 
-        self._source_param = create_index_parameter(self._config.index_source)
+        self._source_param = create_parameter(self._config.index_source)
 
     _attr_device_class = MediaPlayerDeviceClass.SPEAKER
     _attr_supported_features = (
@@ -136,7 +147,7 @@ class SpeakerEntity(YamahaDspMediaPlayerEntity):
 
 class SourceEntity(YamahaDspMediaPlayerEntity):
     def __init__(self, config: SourceConfiguration, device: YamahaDspDevice, device_info: DeviceInfo):
-        super().__init__(device, device_info, config.index_volume, config.index_mute)
+        super().__init__(device, device_info, config.index_volume, config.index_mute, config.max_volume)
         self._config = config
 
     _attr_device_class = MediaPlayerDeviceClass.SPEAKER

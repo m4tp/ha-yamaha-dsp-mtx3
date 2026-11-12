@@ -11,30 +11,33 @@ from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryError, ConfigEntryNotReady
 from homeassistant.helpers.device_registry import DeviceInfo
 
-from custom_components.yamaha_dsp.const import DOMAIN
+from custom_components.yamaha_dsp.const import DOMAIN, MAX_NORMALIZED_VOLUME
+from custom_components.yamaha_dsp.yamaha.command import Address, create_parameter
 from custom_components.yamaha_dsp.yamaha.device import ProductInformation, YamahaDspDevice
 
 
 @dataclass
 class SpeakerConfiguration:
     name: str
-    index_source: int
-    index_volume: int
-    index_mute: int
+    index_source: Address
+    index_volume: Address
+    index_mute: Address
     available_inputs: list[str]
+    max_volume: int = MAX_NORMALIZED_VOLUME
 
 
 @dataclass
 class SourceConfiguration:
     name: str
-    index_volume: int
-    index_mute: int
+    index_volume: Address
+    index_mute: Address
+    max_volume: int = MAX_NORMALIZED_VOLUME
 
 
 @dataclass
 class RouteConfiguration:
     name: str
-    index_mute: int
+    index_mute: Address
 
 
 @dataclass
@@ -46,7 +49,7 @@ class RouterSourceConfiguration:
 @dataclass
 class RouterConfiguration:
     name: str
-    index_source: int
+    index_source: Address
     sources: list[RouterSourceConfiguration]
 
 
@@ -69,6 +72,7 @@ class EntityType(Enum):
     SOURCE = "source"
     ROUTE = "route"
     ROUTER = "router"
+    PRESET = "preset"
 
 
 PLATFORMS: list[Platform] = [Platform.MEDIA_PLAYER, Platform.SWITCH, Platform.SELECT]
@@ -84,6 +88,20 @@ def create_unique_id(name: str, entity_type: EntityType) -> str:
     return id
 
 
+def _parse_address(parsed: dict, key: str) -> Address:
+    address = parsed[key]
+    # Validate early so that a typo fails the config entry instead of every update
+    create_parameter(address)
+    return address
+
+
+def _parse_max_volume(parsed: dict) -> int:
+    max_volume = int(parsed.get("max_volume", MAX_NORMALIZED_VOLUME))
+    if not 1 <= max_volume <= MAX_NORMALIZED_VOLUME:
+        raise ValueError(f"max_volume must be between 1 and {MAX_NORMALIZED_VOLUME} in '{parsed['name']}'")
+    return max_volume
+
+
 def create_dsp_configuration(options) -> DspConfiguration:
     dsp_configuration = DspConfiguration()
 
@@ -92,10 +110,11 @@ def create_dsp_configuration(options) -> DspConfiguration:
         dsp_configuration.speakers.append(
             SpeakerConfiguration(
                 parsed["name"],
-                parsed["index_source"],
-                parsed["index_volume"],
-                parsed["index_mute"],
+                _parse_address(parsed, "index_source"),
+                _parse_address(parsed, "index_volume"),
+                _parse_address(parsed, "index_mute"),
                 parsed.get("sources") or options["default_speaker_sources"],
+                _parse_max_volume(parsed),
             )
         )
 
@@ -104,8 +123,9 @@ def create_dsp_configuration(options) -> DspConfiguration:
         dsp_configuration.sources.append(
             SourceConfiguration(
                 parsed["name"],
-                parsed["index_volume"],
-                parsed["index_mute"],
+                _parse_address(parsed, "index_volume"),
+                _parse_address(parsed, "index_mute"),
+                _parse_max_volume(parsed),
             )
         )
 
@@ -114,7 +134,7 @@ def create_dsp_configuration(options) -> DspConfiguration:
         dsp_configuration.routes.append(
             RouteConfiguration(
                 parsed["name"],
-                parsed["index_mute"],
+                _parse_address(parsed, "index_mute"),
             )
         )
 
@@ -137,7 +157,7 @@ def create_dsp_configuration(options) -> DspConfiguration:
         dsp_configuration.routers.append(
             RouterConfiguration(
                 parsed["name"],
-                parsed["index_source"],
+                _parse_address(parsed, "index_source"),
                 sources,
             )
         )
@@ -151,6 +171,7 @@ class RuntimeData:
     product_information: ProductInformation
     device_info: DeviceInfo
     dsp_configuration: DspConfiguration
+    supports_presets: bool = False
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -176,7 +197,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         # Build the DSP configuration based on the configuration given by the option flow
         dsp_configuration = create_dsp_configuration(entry.options)
 
-        entry.runtime_data = RuntimeData(device, product_information, device_info, dsp_configuration)
+        # MTX3/MTX5-D presets are recalled with ssrecall (the MRX7-D uses snapshots instead)
+        supports_presets = product_information.product_name.upper().startswith("MTX")
+
+        entry.runtime_data = RuntimeData(device, product_information, device_info, dsp_configuration, supports_presets)
     except ConnectionError as e:
         raise ConfigEntryNotReady("Unable to connect") from e
     except json.JSONDecodeError as e:

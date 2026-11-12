@@ -9,8 +9,11 @@ from custom_components.yamaha_dsp.yamaha.command import ParameterValueType
 from custom_components.yamaha_dsp.yamaha.response import (
     NotifyResponse,
     OkResponse,
+    PresetInfo,
     Response,
     ResponseError,
+    parse_current_preset,
+    parse_preset_info,
     parse_response,
 )
 
@@ -157,3 +160,34 @@ class YamahaDspDevice(TelnetDevice):
 
     async def set_parameter_normalized(self, option1: str, option2: str, option3: str, value: str) -> OkResponse:
         return await self._set_parameter(ParameterValueType.NORMALIZED, option1, option2, option3, value)
+
+    async def query_preset_count(self) -> int:
+        resp = await self._run_command("ssnum")
+        return resp.get_int_value()
+
+    async def query_preset_info(self, index: int) -> PresetInfo:
+        resp = await self._run_command(f"ssinfo {index}")
+        return parse_preset_info(resp.raw_response)
+
+    async def query_user_presets(self) -> list[PresetInfo]:
+        count = await self.query_preset_count()
+        presets = []
+
+        for index in range(count):
+            try:
+                info = await self.query_preset_info(index)
+            except (ResponseError, ValueError) as e:
+                logger.debug(f"Skipping preset {index}: {e}")
+                continue
+
+            if info.is_user_preset:
+                presets.append(info)
+
+        return presets
+
+    async def query_current_preset(self) -> int:
+        resp = await self._run_command("sscurrent")
+        return parse_current_preset(resp.raw_response)
+
+    async def recall_preset(self, index: int) -> OkResponse:
+        return await self._run_command(f"ssrecall {index}")

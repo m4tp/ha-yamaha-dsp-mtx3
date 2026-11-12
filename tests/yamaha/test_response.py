@@ -1,6 +1,13 @@
 import unittest
 
-from custom_components.yamaha_dsp.yamaha.response import ErrorResponse, NotifyResponse, OkResponse, parse_response
+from custom_components.yamaha_dsp.yamaha.response import (
+    ErrorResponse,
+    NotifyResponse,
+    OkResponse,
+    parse_current_preset,
+    parse_preset_info,
+    parse_response,
+)
 
 
 class YamahaResponseTest(unittest.TestCase):
@@ -32,3 +39,23 @@ class YamahaResponseTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PresetResponseTests(unittest.TestCase):
+    def test_parse_preset_info(self):
+        info = parse_preset_info('OK ssinfo 10 "10" user "Preset 10" ""')
+        self.assertEqual(10, info.index)
+        self.assertEqual("10", info.number)
+        self.assertEqual("Preset 10", info.title)
+        self.assertTrue(info.is_user_preset)
+
+        empty = parse_preset_info('OK ssinfo 11 "11" empty "" ""')
+        self.assertFalse(empty.is_user_preset)
+
+    def test_parse_preset_info_rejects_other_responses(self):
+        with self.assertRaises(ValueError):
+            parse_preset_info("OK sscurrent 10 unmodified")
+
+    def test_parse_current_preset(self):
+        self.assertEqual(10, parse_current_preset("OK sscurrent 10 unmodified"))
+        self.assertEqual(3, parse_current_preset("OK sscurrent 3 modified\n"))

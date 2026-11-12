@@ -1,3 +1,5 @@
+import shlex
+
 from dataclasses import dataclass
 
 
@@ -55,3 +57,36 @@ def parse_response(response: str) -> Response:
 
 class ResponseError(Exception):
     pass
+
+
+@dataclass
+class PresetInfo:
+    index: int
+    number: str
+    attribute: str
+    title: str
+
+    @property
+    def is_user_preset(self) -> bool:
+        return self.attribute == "user"
+
+
+def parse_preset_info(raw_response: str) -> PresetInfo:
+    # OK ssinfo 10 "10" user "Preset 10" ""
+    # Titles may contain spaces, so the response must be split respecting quotes
+    parts = shlex.split(raw_response.strip())
+
+    if len(parts) < 6 or parts[0] not in ("OK", "OKm") or parts[1] != "ssinfo":
+        raise ValueError(f"Unexpected ssinfo response: {raw_response}")
+
+    return PresetInfo(int(parts[2]), parts[3], parts[4], parts[5])
+
+
+def parse_current_preset(raw_response: str) -> int:
+    # OK sscurrent 10 unmodified
+    parts = raw_response.strip().split()
+
+    if len(parts) < 3 or parts[0] not in ("OK", "OKm") or parts[1] != "sscurrent":
+        raise ValueError(f"Unexpected sscurrent response: {raw_response}")
+
+    return int(parts[2])

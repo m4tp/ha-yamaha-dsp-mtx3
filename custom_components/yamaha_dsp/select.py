@@ -12,7 +12,7 @@ from custom_components.yamaha_dsp import (
     YamahaDspDevice,
     create_unique_id,
 )
-from custom_components.yamaha_dsp.yamaha.command import create_index_parameter
+from custom_components.yamaha_dsp.yamaha.command import create_parameter
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +28,10 @@ async def async_setup_entry(_hass: HomeAssistant, entry, async_add_entities):
     for router_configuration in dsp_configuration.routers:
         async_add_entities([RouterSelectEntity(router_configuration, device, device_info)])
 
+    # MTX3/MTX5-D: one select entity for recalling presets
+    if runtime_data.supports_presets:
+        async_add_entities([PresetSelectEntity(device, device_info)])
+
 
 class RouterSelectEntity(SelectEntity):
     def __init__(self, config: RouterConfiguration, device: YamahaDspDevice, device_info: DeviceInfo):
@@ -35,7 +39,7 @@ class RouterSelectEntity(SelectEntity):
         self._device = device
         self._device_info = device_info
 
-        self._source_param = create_index_parameter(self._config.index_source)
+        self._source_param = create_parameter(self._config.index_source)
         self._source_bidict = bidict({source.value: source.label for source in self._config.sources})
         self._current_option: str | None = None
 
@@ -77,3 +81,78 @@ class RouterSelectEntity(SelectEntity):
             raise ValueError(f"Invalid option '{option}' for router '{self._config.name}'")
 
         await self._device.set_parameter_raw(self._source_param, "0", "0", str(source_value))
+
+
+class PresetSelectEntity(SelectEntity):
+    """Shows the current preset and recalls a preset when an option is selected."""
+
+    # The preset list rarely changes (only when re-synchronized from MTX-MRX Editor),
+    # so it is refreshed only every N updates or when an unknown preset is active
+    PRESET_LIST_REFRESH_INTERVAL = 20
+
+    def __init__(self, device: YamahaDspDevice, device_info: DeviceInfo):
+        self._device = device
+        self._device_info = device_info
+
+        self._presets: bidict[int, str] = bidict()
+        self._current_option: str | None = None
+        self._updates_since_refresh = self.PRESET_LIST_REFRESH_INTERVAL
+
+    @property
+    def name(self) -> str:
+        return "Preset"
+
+    @property
+    def unique_id(self) -> str:
+        serial = next(iter(self._device_info["identifiers"]))[1]
+        return f"{serial}_{EntityType.PRESET.value}"
+
+    @property
+    def icon(self) -> str:
+        return "mdi:playlist-play"
+
+    @property
+    def device_info(self) -> DeviceInfo:
+        return self._device_info
+
+    @property
+    def options(self) -> list[str]:
+        return list(self._presets.values())
+
+    @property
+    def current_option(self) -> str | None:
+        return self._current_option
+
+    async def _refresh_preset_list(self) -> None:
+        presets = await self._device.query_user_presets()
+        labels: bidict[int, str] = bidict()
+
+        for preset in presets:
+            label = f"{preset.number} {preset.title}".strip()
+            # Preset titles are not guaranteed to be unique
+            if label in labels.inverse:
+                label = f"{label} ({preset.index})"
+            labels[preset.index] = label
+
+        self._presets = labels
+        self._updates_since_refresh = 0
+
+    async def async_update(self) -> None:
+        if self._updates_since_refresh >= self.PRESET_LIST_REFRESH_INTERVAL:
+            await self._refresh_preset_list()
+        else:
+            self._updates_since_refresh += 1
+
+        current = await self._device.query_current_preset()
+        if current not in self._presets and self._updates_since_refresh > 0:
+            await self._refresh_preset_list()
+
+        self._current_option = self._presets.get(current)
+
+    async def async_select_option(self, option: str) -> None:
+        index = self._presets.inverse.get(option)
+        if index is None:
+            raise ValueError(f"Invalid preset '{option}'")
+
+        await self._device.recall_preset(index)
+        self._current_option = option

@@ -1,5 +1,8 @@
 DOMAIN = "yamaha_dsp"
 
+# Normalized fader range is 0-1000: 0 = -inf dB, 804 = 0 dB, 1000 = +10 dB
+MAX_NORMALIZED_VOLUME = 1000
+
 CONF_HOST = "host"
 CONF_PORT = "port"
 

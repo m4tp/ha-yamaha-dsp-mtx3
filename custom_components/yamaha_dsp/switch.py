@@ -13,7 +13,7 @@ from custom_components.yamaha_dsp import (
     YamahaDspDevice,
     create_unique_id,
 )
-from custom_components.yamaha_dsp.yamaha.command import create_index_parameter
+from custom_components.yamaha_dsp.yamaha.command import create_parameter
 
 logger = logging.getLogger(__name__)
 
@@ -38,7 +38,7 @@ class RouteSwitchEntity(SwitchEntity):
 
         self._switch_state = False
 
-        self._mute_param = create_index_parameter(self._config.index_mute)
+        self._mute_param = create_parameter(self._config.index_mute)
 
     _attr_device_class = SwitchDeviceClass.SWITCH
 

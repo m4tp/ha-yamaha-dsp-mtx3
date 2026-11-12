@@ -55,6 +55,48 @@ class UtilsTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             create_dsp_configuration(options)
 
+    def test_mtx_memory_address_configuration(self):
+        options = {
+            "speaker_configuration": [
+                """
+                {
+                  "name": "Zona 1",
+                  "index_source": "mem_512/20019/0/0/0/0/0",
+                  "index_volume": "mem_512/60002/0/0/0/0/0",
+                  "index_mute": "mem_512/60003/0/0/0/0/0",
+                  "sources": ["MIC_1"],
+                  "max_volume": 804
+                }
+                """
+            ],
+            "source_configuration": [
+                """
+                {
+                  "name": "MIC_1",
+                  "index_volume": "mem_512/60000/0/0/0/0/0",
+                  "index_mute": "mem_512/60001/0/0/0/0/0"
+                }
+                """
+            ],
+        }
+        config = create_dsp_configuration(options)
+
+        self.assertEqual("mem_512/60002/0/0/0/0/0", config.speakers[0].index_volume)
+        self.assertEqual(804, config.speakers[0].max_volume)
+        self.assertEqual(1000, config.sources[0].max_volume)
+
+    def test_invalid_address_is_rejected(self):
+        options = {"source_configuration": ['{"name": "X", "index_volume": "mem_512/60000", "index_mute": 1}']}
+
+        with self.assertRaises(ValueError):
+            create_dsp_configuration(options)
+
+    def test_invalid_max_volume_is_rejected(self):
+        options = {"source_configuration": ['{"name": "X", "index_volume": 1, "index_mute": 2, "max_volume": 0}']}
+
+        with self.assertRaises(ValueError):
+            create_dsp_configuration(options)
+
 
 if __name__ == "__main__":
     unittest.main()
